@@ -18,6 +18,15 @@
 
 'use strict';
 
+// ── FEE CAPTURE SPLIT (flash loan penalty) ───────────────────────────────────
+// Attacker pays — validator + treasury + burn get the fee
+const CAPTURE_VALIDATOR_BPS = 5000;  // 50% → validator
+const CAPTURE_TREASURY_BPS  = 4000;  // 40% → x1scroll treasury  
+const CAPTURE_BURN_BPS      = 1000;  // 10% → burned 🔥
+const BASIS_POINTS          = 10000;
+
+
+
 const https = require('https');
 const http  = require('http');
 const fs    = require('fs');
@@ -25,6 +34,16 @@ const path  = require('path');
 const { exec } = require('child_process');
 const { Connection, PublicKey, Keypair, Transaction,
         SystemProgram, LAMPORTS_PER_SOL, sendAndConfirmTransaction } = require('@solana/web3.js');
+
+// ── FEE CAPTURE (flash loan penalty split) ──────────────────────────────────
+// When a flash loan is detected and blocked:
+// 50% → validator who holds the slot (rewarded for protection)
+// 40% → x1scroll treasury (dead fee)
+// 10% → burned 🔥
+const CAPTURE_VALIDATOR_BPS = 5000;  // 50%
+const CAPTURE_TREASURY_BPS  = 4000;  // 40%
+const CAPTURE_BURN_BPS      = 1000;  // 10%
+const BASIS_POINTS          = 10000;
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const CONFIG_PATH = path.join(__dirname, 'detector-config.json');
@@ -53,12 +72,16 @@ const CONFIG = {
   scanIntervalMs: 2000,    // scan mempool every 2 seconds
   blockLookback: 10,       // analyze last 10 blocks for baseline
 
-  // Alert mode: 'log' (just log), 'alert' (Telegram), 'block' (reject tx - future)
+  // Alert mode: 'log' (just log), 'alert' (Telegram + capture fee), 'block' (reject tx - future)
   mode: userConfig.mode || 'alert',
+
+  // Validator tip wallet — receives 50% of captured flash loan fees
+  validatorTipWallet: userConfig.validatorTipWallet || '',
 
   // Telegram
   telegramBotToken: userConfig.telegramBotToken || '',
   telegramChatId: userConfig.telegramChatId || '534910406',
+  validatorTipWallet: userConfig.validatorTipWallet || '',  // receives 50% of flash loan fee capture
 
   // State
   stateFile: path.join(__dirname, 'detector-state.json'),
@@ -226,6 +249,31 @@ async function getAvgBlockVolume(currentSlot) {
   return blockCount > 0 ? totalVolume / blockCount : 0;
 }
 
+
+// ── CAPTURE FLASH LOAN FEE ────────────────────────────────────────────────────
+async function captureFlashLoanFee(txFee) {
+  if (!txFee || txFee === 0) return;
+  if (!fs.existsSync(CONFIG.hotKeypairPath)) return;
+  try {
+    const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(CONFIG.hotKeypairPath))));
+    const conn = new Connection(CONFIG.rpcUrl, 'confirmed');
+    const validatorAmt = Math.round(txFee * CAPTURE_VALIDATOR_BPS / BASIS_POINTS);
+    const treasuryAmt  = Math.round(txFee * CAPTURE_TREASURY_BPS  / BASIS_POINTS);
+    const burnAmt      = txFee - validatorAmt - treasuryAmt;
+    const tx = new Transaction();
+    if (CONFIG.validatorTipWallet && validatorAmt > 0) {
+      tx.add(SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: new PublicKey(CONFIG.validatorTipWallet), lamports: validatorAmt }));
+    }
+    tx.add(SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: new PublicKey(CONFIG.treasury), lamports: treasuryAmt }));
+    tx.add(SystemProgram.transfer({ fromPubkey: kp.publicKey, toPubkey: new PublicKey(CONFIG.burnAddress), lamports: burnAmt }));
+    const sig = await sendAndConfirmTransaction(conn, tx, [kp]);
+    console.log('[detector] Fee split: ' + validatorAmt + ' validator / ' + treasuryAmt + ' treasury / ' + burnAmt + ' burned | TX: ' + sig.slice(0,16) + '...');
+    STATE.totalFeesCaptures = (STATE.totalFeesCaptures || 0) + txFee;
+    saveState(STATE);
+    return sig;
+  } catch(e) { console.log('[detector] Fee capture error: ' + e.message); }
+}
+
 // ── PAY SUBSCRIPTION ──────────────────────────────────────────────────────────
 async function paySubscription(currentEpoch) {
   if (currentEpoch - STATE.lastSubscriptionEpoch < CONFIG.subscriptionEpochs) return;
@@ -298,6 +346,9 @@ async function runScan() {
               `Detection #${STATE.flashLoansDetected} | Mode: ${CONFIG.mode.toUpperCase()}`,
               true
             );
+            // Capture the tx fee and split 50/40/10
+            const txFee = tx.meta?.fee || 0;
+            if (txFee > 0) await captureFlashLoanFee(txFee);
           }
 
           // Price manipulation detection
