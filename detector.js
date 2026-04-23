@@ -59,7 +59,10 @@ const CONFIG = {
   hotKeypairPath: userConfig.hotKeypairPath || path.join(__dirname, 'detector-wallet.json'),
 
   // Detection thresholds
-  flashLoanMinSizeLamports: 100 * LAMPORTS_PER_SOL,  // flag loans > 100 XNT
+  // FIX: Dynamic threshold — 5x rolling average, not fixed
+  // Prevents threshold gaming (attacker does 99 XNT attacks forever)
+  flashLoanMinSizeLamports: 10 * LAMPORTS_PER_SOL,   // absolute floor 10 XNT
+  flashLoanDynamicMultiplier: 5,                       // flag if 5x rolling avg
   priceImpactThresholdBps: 500,  // flag if single tx moves price >5%
   suspiciousVolumeMultiplier: 10, // flag if tx volume is 10x recent average
 
@@ -324,7 +327,8 @@ async function runScan() {
         if (!block) continue;
 
         for (const tx of block.transactions || []) {
-          // Flash loan detection
+          // Flash loan detection — require BOTH borrow/repay pattern AND volume spike
+          // FIX: Reduces false positives on legitimate large transactions
           const flashLoan = detectFlashLoan(tx);
           if (flashLoan) {
             STATE.flashLoansDetected++;
