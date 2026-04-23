@@ -40,11 +40,6 @@ const { Connection, PublicKey, Keypair, Transaction,
 // 50% → validator who holds the slot (rewarded for protection)
 // 40% → x1scroll treasury (dead fee)
 // 10% → burned 🔥
-const CAPTURE_VALIDATOR_BPS = 5000;  // 50%
-const CAPTURE_TREASURY_BPS  = 4000;  // 40%
-const CAPTURE_BURN_BPS      = 1000;  // 10%
-const BASIS_POINTS          = 10000;
-
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const CONFIG_PATH = path.join(__dirname, 'detector-config.json');
 const userConfig = fs.existsSync(CONFIG_PATH)
