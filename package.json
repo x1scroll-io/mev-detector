@@ -1,0 +1,12 @@
+{
+  "name": "@x1scroll/mev-detector",
+  "version": "0.1.0",
+  "description": "MEV and flash loan detector for X1 validators — protect the ecosystem before attacks land",
+  "main": "detector.js",
+  "keywords": ["x1", "mev", "flash-loan", "security", "validator", "x1scroll"],
+  "author": "x1scroll.io",
+  "license": "MIT",
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0"
+  }
+}
